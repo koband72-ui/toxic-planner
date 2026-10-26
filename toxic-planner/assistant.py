@@ -5,7 +5,7 @@ import logging
 import os
 from typing import Literal
 from pydantic import BaseModel, Field, model_validator
-from google import genai
+import google.generativeai as genai
 from google.genai import types
 from domain import KYIV, parse
 

@@ -12,7 +12,8 @@ import google.generativeai as genai
 # НАЛАШТУВАННЯ КЛЮЧІВ (ВСТАВ СВОЇ)
 # ---------------------------------------------------------
 BOT_TOKEN = "8924606893:AAG0w63ec6uWZim_C879K0yDjbvgCSgZlyM"
-GEMINI_API_KEY = "AIzaSyD8SN3zjHZtoUL9HZlLpPb2fKYtRQZuD2A"
+import os
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Налаштування Gemini
 genai.configure(api_key=GEMINI_API_KEY)

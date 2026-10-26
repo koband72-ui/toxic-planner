@@ -50,27 +50,26 @@ class Assistant:
         if not self.client:
             return Proposal(reply='Gemini не налаштований. Команди /add, /tasks, /goals, /habits, /ideas працюють без нього.')
         context={k:state[k] for k in ('tasks','goals','habits','ideas')}
-        context={k:v[-100:] for k,v in context.items()}
+        context={k:v[-50:] for k,v in context.items()}
         
         current_time = dt.astimezone(KYIV).isoformat()
         prompt=f'''Ти — мій кореш і особистий планнер. Звертайся до мене «вась» або «братське серце». Базари жорстко і з матюками по ділу.
 Зараз {current_time}, Europe/Kyiv.
-Поверни ВІДПОВІДЬ ВИКЛЮЧНО У ВИГЛЯДІ ВАЛІДНОГО JSON (без жодних форматування markdown типу ```json ... ```), за такою структурою:
+Поверни ВІДПОВІДЬ ВИКЛЮЧНО У ВИГЛЯДІ ВАЛІДНОГО JSON (без жодних markdown-обгорток типу ```json), за такою структурою:
 {{
-  "reply": "Твоя відповідь або підтвердження у твоєму стилі",
+  "reply": "Твоя відповідь або підтвердження у твоєму стилі з матами",
   "operations": [
     {{
       "action": "add_task",
       "title": "назва задачі",
-      "due": "{dt.astimezone(KYIV).replace(hour=19, minute=0, second=0).isoformat()}",
+      "due": "2026-10-28T19:00:00+02:00",
       "priority": 2
     }}
   ]
 }}
-Якщо користувач просто пише розмову або питання — масив operations має бути порожнім ([]).
-Дата у due має бути обов'язково у форматі ISO8601 з часовим поясом (наприклад, 2026-10-28T19:00:00+02:00), виходячи з поточного часу {current_time}.
+Якщо це просто розмова або нема чіткої зміни — operations має бути порожнім ([]).
 Власні записи користувача: {json.dumps(context,ensure_ascii=False)}
-Повідомлення: {message[:8000]}'''
+Повідомлення: {message[:4000]}'''
 
         contents=[prompt]
         if audio:
@@ -80,7 +79,10 @@ class Assistant:
                 res=await self.client.models.generate_content(
                     model=os.getenv('GEMINI_MODEL','gemini-2.5-flash'), 
                     contents=contents,
-                    config=types.GenerateContentConfig(temperature=0.2)
+                    config=types.GenerateContentConfig(
+                        temperature=0.2,
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
+                    )
                 )
             
             text_resp = res.text.strip()
@@ -98,7 +100,7 @@ class Assistant:
             return proposal
         except Exception as exc:
             logging.warning('Gemini request failed (%s)',type(exc).__name__)
-            return Proposal(reply=f'Бля, щось пішло не так із розбором, вась. Спробуй через /add назва | дата', operations=[])
+            return Proposal(reply='Бля, затупив із цим запитом, вась. Напиши через /add назва | дата', operations=[])
 
     async def close(self):
         if self.client:

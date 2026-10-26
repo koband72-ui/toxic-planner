@@ -32,10 +32,7 @@ class Operation(BaseModel):
         if self.action=='move' and not self.due:
             raise ValueError('Потрібна нова дата')
         if self.due:
-            try:
-                parse(self.due)
-            except Exception as e:
-                raise ValueError(f'Неправильний формат дати: {self.due} ({e})')
+            parse(self.due)
         return self
 
 
@@ -46,15 +43,28 @@ class Proposal(BaseModel):
 
 class Assistant:
     def __init__(self):
-        key=os.getenv('GEMINI_API_KEY')
-        self.client=genai.Client(api_key=key).aio if key else None
+        # Збираємо ключі: з GEMINI_API_KEYS (через кому) або з єдиного GEMINI_API_KEY
+        keys_env = os.getenv('GEMINI_API_KEYS', os.getenv('GEMINI_API_KEY', ''))
+        self.keys = [k.strip() for k in keys_env.split(',') if k.strip()]
+        self.current_key_idx = 0
+
+    def _get_client(self):
+        if not self.keys:
+            return None
+        key = self.keys[self.current_key_idx]
+        return genai.Client(api_key=key).aio
+
+    def _rotate_key(self):
+        if len(self.keys) > 1:
+            self.current_key_idx = (self.current_key_idx + 1) % len(self.keys)
+            logging.warning('Перемикаємося на резервний API-ключ (індекс %d)', self.current_key_idx)
 
     async def propose(self, message, state, dt, audio=None):
-        if not self.client:
+        if not self.keys:
             return Proposal(reply='Gemini не налаштований. Команди /add, /tasks, /goals, /habits, /ideas працюють без нього.')
+        
         context={k:state[k] for k in ('tasks','goals','habits','ideas')}
         context={k:v[-100:] for k,v in context.items()}
-        
         prompt=f'''Ти — мій кореш і особистий планнер. Звертайся до мене «вась» або «братське серце». Базари жорстко і з матюками по ділу.
 Зараз {dt.astimezone(KYIV).isoformat()}, Europe/Kyiv.
 Стиль: {state['settings']['tone']}; calm=спокійно; direct=прямо; hard=коротко і жорстко, з матами.
@@ -70,27 +80,37 @@ priority 1=високий,2=звичайний,3=низький. Додавай 
         contents=[prompt]
         if audio:
             contents.append(types.Part.from_bytes(data=audio, mime_type='audio/ogg'))
-        try:
-            async with asyncio.timeout(40):
-                res=await self.client.models.generate_content(
-                    model=os.getenv('GEMINI_MODEL','gemini-2.5-flash'), 
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        response_mime_type='application/json', 
-                        response_schema=Proposal, 
-                        temperature=0.3
+
+        # Пробуємо всі доступні ключі по черзі, якщо вилітає квота
+        attempts = len(self.keys)
+        for _ in range(attempts):
+            client = self._get_client()
+            try:
+                async with asyncio.timeout(40):
+                    res = await client.models.generate_content(
+                        model=os.getenv('GEMINI_MODEL','gemini-2.5-flash'), 
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            response_mime_type='application/json', 
+                            response_schema=Proposal, 
+                            temperature=0.3
+                        )
                     )
-                )
-            proposal=Proposal.model_validate_json(res.text)
-            for op in proposal.operations:
-                if op.id is not None and not any(t['id']==op.id for t in state['tasks']):
-                    raise ValueError('Unknown task')
-            return proposal
-        except Exception as exc:
-            # ВИВОДИМО ПОВНИЙ СТЕКТРЕЙС У ЛОГИ, ЩОБ БУЧИЛО РЕАЛЬНУ ПРИЧИНУ
-            logging.exception('Gemini propose failed with exception:')
-            return Proposal(reply='Бля, сталася хуйня при розборі. Подробиці в логах Render, вась.')
+                proposal = Proposal.model_validate_json(res.text)
+                for op in proposal.operations:
+                    if op.id is not None and not any(t['id']==op.id for t in state['tasks']):
+                        raise ValueError('Unknown task')
+                return proposal
+            except Exception as exc:
+                err_str = str(exc)
+                if '429' in err_str or 'RESOURCE_EXHAUSTED' in err_str:
+                    logging.warning('Ключ вичерпав ліміт, робимо ротацію...')
+                    self._rotate_key()
+                else:
+                    logging.exception('Gemini propose failed with exception:')
+                    return Proposal(reply='Бля, сталася хуйня при розборі. Подробиці в логах Render, вась.')
+
+        return Proposal(reply='Бля, всі резервні ключі вичерпали квоту на сьогодні, вась. Чекай оновлення лімітів.')
 
     async def close(self):
-        if self.client:
-            await self.client.aclose()
+        pass

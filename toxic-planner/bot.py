@@ -114,7 +114,6 @@ class Planner:
                     return copy.deepcopy(ledger[key])
                 result=fn(s)
                 if key:
-                    # fn can replace the document when confirming a batch.
                     ledger=s.setdefault('mutations',{})
                     ledger[key]=copy.deepcopy(result)
                     while len(ledger)>2000: ledger.pop(next(iter(ledger)))
@@ -136,10 +135,17 @@ class Planner:
         from assistant import Proposal
         p=Proposal.model_validate(saved['proposal'])
         key=saved['key']
+        
         summary=[]
         for op in p.operations:
-            summary.append(f"{op.action}: "+(f'#{op.id} ' if op.id else '')+(op.title or '')+(f' · {when(op.due)}' if op.due else '')+(f' · {op.target} разів/тиждень' if op.target else ''))
-        await self.send(uid,p.reply+ ('\n\nПропоновані зміни:\n'+'\n'.join(summary) if key else ''),
+            title = op.title or 'Без назви'
+            time_str = when(op.due) if op.due else 'сьогодні'
+            summary.append(f"  – {title} — {time_str}")
+
+        formatted_summary = '\n\n' + '\n'.join(summary) if key else ''
+        full_text = p.reply + formatted_summary
+
+        await self.send(uid, full_text,
                         keyboard([[('Підтвердити',f'confirm:{key}'),('Відхилити',f'reject:{key}')]]) if key else None)
 
     async def message(self,m):
@@ -205,7 +211,6 @@ class Planner:
                     line+=f" · {sum(t['status']=='done' for t in ts)}/{len(ts)} кроків · {when(item.get('due'))}"
                     rows.append([(f'Запропонувати кроки #{i}',f'goal:{i}')])
                 lines.append(line)
-            # Each page is an independent message, kept below Telegram limits.
             for start in range(0,max(1,len(lines)),8):
                 await self.send(uid,'\n'.join(lines[start:start+8]) or 'Список порожній.',keyboard(rows[start:start+8]))
         elif cmd=='/weekly': await self.send(uid,report(s,dt))
@@ -240,7 +245,7 @@ class Planner:
         elif cmd=='/quiet':
             a,b=map(int,arg.split())
             if not 0<=a<=23 or not 0<=b<=23: raise ValueError('Години: 0–23')
-            await self.mutate(uid,lambda s:s['settings'].update(quiet_start=a,quiet_end=b)); await self.send(uid,'Тихі години збережено. Вони також можуть відкласти ранковий або вечірній звіт.')
+            await self.mutate(uid,lambda s:s['settings'].update(quiet_start=a,quiet_end=b)); await self.send(uid,'Тихі години збережено.')
         elif cmd=='/limit':
             limit=int(arg)
             if not 1<=limit<=30: raise ValueError('Ліміт: 1–30')
@@ -413,13 +418,11 @@ class Planner:
         except TelegramRetryAfter as exc:
             await self.mutate(uid,lambda s:s['sent'][key].update(lease=iso(dt+timedelta(seconds=exc.retry_after))))
         except Exception as exc:
-            # Lease expires; retry next tick. A crash after Telegram accepts can duplicate a message.
             logging.warning('Notification delivery failed: %s',type(exc).__name__)
 
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    # HTTP debug logs must never expose Telegram token URLs.
     logging.getLogger('httpx').setLevel(logging.WARNING)
     bot=Bot(os.environ['BOT_TOKEN']); planner=Planner(Store(),bot)
     public=os.getenv('WEBHOOK_BASE_URL',os.getenv('RENDER_EXTERNAL_URL','')).rstrip('/')
@@ -439,7 +442,6 @@ async def main():
         if not webhook_secret or not hmac.compare_digest(request.headers.get('X-Telegram-Bot-Api-Secret-Token',''),webhook_secret):
             raise web.HTTPUnauthorized()
         update=types.Update.model_validate(await request.json(),context={'bot':bot})
-        # Wait for processing before acknowledgement; no fire-and-forget work on sleeping Free hosts.
         await planner.dp.feed_update(bot,update)
         return web.json_response({'ok':True})
     app.router.add_get('/',health); app.router.add_get('/healthz',health)

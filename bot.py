@@ -32,11 +32,10 @@ generation_config = {
     "max_output_tokens": 400,
 }
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-pro",
+    model_name="gemini-1.5-flash",
     generation_config=generation_config,
     system_instruction=SYSTEM_INSTRUCTION
 )
-
 # ---------------------------------------------------------
 # БАЗА ДАНИХ (SQLite)
 # ---------------------------------------------------------

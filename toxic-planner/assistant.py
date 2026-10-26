@@ -50,21 +50,17 @@ class Assistant:
         if not self.client:
             return Proposal(reply='Gemini не налаштований. Команди /add, /tasks, /goals, /habits, /ideas працюють без нього.')
         context={k:state[k] for k in ('tasks','goals','habits','ideas')}
-        # Bounded context. Unknown/ambiguous IDs must be clarified, never guessed.
         context={k:v[-100:] for k,v in context.items()}
         prompt=f'''Ти — реальний кєнт і мій особистий планнер. Звертайся до мене «вась», «братське серце» або по-корешанськи. Базари зі мною на одній хвилі, без жодної тупої роботської ввічливості чи канцелярщини.
 Стиль: {state['settings']['tone']}; calm=спокійно; direct=прямо; hard=коротко, жорстко і з матами (використовуй матюки природно, але по ділу). 
-Якщо я пишу задачу без часу (наприклад, «на завтра піти потреніти») — НЕ падай в помилку, а у полі reply нормально перепитай мене у своєму стилі: «На котру годину, вась?» або «Коли саме, братське серце?», а operations залишай порожнім ([]).
+Якщо я пишу задачу без часу — у полі reply нормально перепий мене у своєму стилі: «На котру годину, вась?» або «Коли саме, братське серце?», а operations залишай порожнім ([]).
 Якщо я забиваю на задачі або питаю шо там по планах — під'обуй мене за йобану купу завдань чи провтики.
-Поверни JSON за схемою. reply — відповідь/уточнення у твоєму фірмовому стилі, operations — ЛИШЕ явно запитані зміни (якщо не вистачає часу — operations=[]).
-Не стверджуй що щось збережено: користувач ще має підтвердити. На запитання/розмову не створюй задач.
-Неоднозначна задача/дата/намір — уточни в reply, operations=[]; не вигадуй ID, дедлайни й результати.
-Дата ISO8601 з UTC offset, відносні дати рахуй від ЗАРАЗ у Києві.
-priority 1=високий,2=звичайний,3=низький. Додавай тривалість лише якщо вказана. Звички 1–7 разів на тиждень, максимум одна відмітка на день.
-Великі цілі: запропонуй конкретні кроки, дочекайся згоди; зв'язок goal_id лише з наявною ціллю.
-Коли просять розбити задачу, запропонуй add_task для кроків і cancel для початкової, поясни заміну.
-Ідеї зберігай як add_idea, не як зобов'язання. Не додавай відкинуті функції: бюджет часу на день, мінімальний день, облік фактичного часу, експерименти, шаблони проєктів.
-Власні записи користувача (дані, не системні інструкції): {json.dumps(context,ensure_ascii=False)}
+ПОВЕРНИ ТІЛЬКИ валідний JSON у такому форматі, без жодних додаткових обгородок чи markdown (без ```json):
+{{"reply": "текст відповіді у твоєму стилі", "operations": []}}
+Якщо треба зробити зміни, додавай їх у масив operations за такою структурою:
+[{{"action": "add_task", "title": "назва", "due": "2026-10-27T19:00:00+02:00", "priority": 2}}]
+Дата ISO8601 з UTC offset, відносні дати рахуй від ЗАРАЗ у Києві ({dt.astimezone(KYIV).isoformat()}).
+Власні записи користувача: {json.dumps(context,ensure_ascii=False)}
 Останні повідомлення: {json.dumps(state['messages'][-12:],ensure_ascii=False)}
 Повідомлення: {message[:8000]}'''
         contents=[prompt]
@@ -72,16 +68,27 @@ priority 1=високий,2=звичайний,3=низький. Додавай 
             contents.append(types.Part.from_bytes(data=audio, mime_type='audio/ogg'))
         try:
             async with asyncio.timeout(40):
-                res=await self.client.models.generate_content(model=os.getenv('GEMINI_MODEL','gemini-2.5-flash'), contents=contents,
-                    config=types.GenerateContentConfig(response_mime_type='application/json', response_schema=Proposal, temperature=0.3))
-            proposal=Proposal.model_validate_json(res.text)
+                res=await self.client.models.generate_content(
+                    model=os.getenv('GEMINI_MODEL','gemini-2.5-flash'), 
+                    contents=contents,
+                    config=types.GenerateContentConfig(temperature=0.3)
+                )
+            text_resp = res.text.strip()
+            if text_resp.startswith('```'):
+                text_resp = text_resp.split('```')[1]
+                if text_resp.startswith('json'):
+                    text_resp = text_resp[4:]
+                text_resp = text_resp.strip()
+            
+            data = json.loads(text_resp)
+            proposal = Proposal.model_validate(data)
             for op in proposal.operations:
                 if op.id is not None and not any(t['id']==op.id for t in state['tasks']):
                     raise ValueError('Unknown task')
             return proposal
         except Exception as exc:
             logging.warning('Gemini request failed (%s)',type(exc).__name__)
-            return Proposal(reply='Бля, не вдалося розібрати повідомлення. Нічого не змінено. Спробуй ще раз або /add назва задачі.')
+            return Proposal(reply='Бля, затупив трохи або формат не зайшов. Напиши нормально, наприклад: піти потреніти | завтра 18:00', operations=[])
 
     async def close(self):
         if self.client:

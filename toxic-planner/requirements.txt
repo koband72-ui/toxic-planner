@@ -3,3 +3,4 @@ google-genai
 apscheduler
 sqlalchemy
 python-dotenv
+psycopg[binary]

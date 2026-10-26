@@ -203,9 +203,27 @@ async def evening_review():
         except:
             pass
 
+from aiohttp import web
+import os
+
+async def handle_ping(request):
+    return web.Response(text="Bot is running!")
+
+async def web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
 async def main():
     logging.basicConfig(level=logging.INFO)
     init_db()
+    
+    # Піднімаємо фоновий вебсервер для Render
+    await web_server()
     
     scheduler.add_job(morning_briefing, 'cron', hour=8, minute=30)
     scheduler.add_job(evening_review, 'cron', hour=21, minute=0)
